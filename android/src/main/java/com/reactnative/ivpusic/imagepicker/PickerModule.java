@@ -1,6 +1,7 @@
 package com.reactnative.ivpusic.imagepicker;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.ClipData;
 import android.content.ContentResolver;
@@ -9,6 +10,7 @@ import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
+import android.location.Location;
 import android.media.MediaMetadataRetriever;
 import android.net.Uri;
 import android.os.Build;
@@ -19,6 +21,7 @@ import android.webkit.MimeTypeMap;
 
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.FileProvider;
+import androidx.exifinterface.media.ExifInterface;
 
 import com.facebook.react.bridge.ActivityEventListener;
 import com.facebook.react.bridge.Callback;
@@ -32,6 +35,9 @@ import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.bridge.WritableNativeMap;
 import com.facebook.react.modules.core.PermissionAwareActivity;
 import com.facebook.react.modules.core.PermissionListener;
+import com.google.android.gms.location.FusedLocationProviderClient;
+import com.google.android.gms.location.LocationServices;
+import com.google.android.gms.tasks.OnSuccessListener;
 import com.yalantis.ucrop.UCrop;
 import com.yalantis.ucrop.UCropActivity;
 
@@ -47,6 +53,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
+
 
 class PickerModule extends ReactContextBaseJavaModule implements ActivityEventListener {
 
@@ -74,6 +81,7 @@ class PickerModule extends ReactContextBaseJavaModule implements ActivityEventLi
     private boolean multiple = false;
     private boolean includeBase64 = false;
     private boolean includeExif = false;
+    private boolean isGPSRequired = false;
     private boolean cropping = false;
     private boolean cropperCircleOverlay = false;
     private boolean freeStyleCropEnabled = false;
@@ -83,6 +91,8 @@ class PickerModule extends ReactContextBaseJavaModule implements ActivityEventLi
     private boolean enableRotationGesture = false;
     private boolean disableCropperColorSetters = false;
     private boolean useFrontCamera = false;
+    private double dLatitude = 0;
+    private double dLongitude = 0;
     private ReadableMap options;
 
     private String cropperActiveWidgetColor = null;
@@ -139,6 +149,7 @@ class PickerModule extends ReactContextBaseJavaModule implements ActivityEventLi
         enableRotationGesture = options.hasKey("enableRotationGesture") && options.getBoolean("enableRotationGesture");
         disableCropperColorSetters = options.hasKey("disableCropperColorSetters") && options.getBoolean("disableCropperColorSetters");
         useFrontCamera = options.hasKey("useFrontCamera") && options.getBoolean("useFrontCamera");
+        isGPSRequired = options.hasKey("isGPSRequired") && options.getBoolean("isGPSRequired");
         this.options = options;
     }
 
@@ -222,17 +233,13 @@ class PickerModule extends ReactContextBaseJavaModule implements ActivityEventLi
         });
     }
 
+
+
     private void permissionsCheck(final Activity activity, final Promise promise, final List<String> requiredPermissions, final Callable<Void> callback) {
 
         List<String> missingPermissions = new ArrayList<>();
-        List<String> supportedPermissions = new ArrayList<>(requiredPermissions);
 
-        // android 11 introduced scoped storage, and WRITE_EXTERNAL_STORAGE no longer works there
-        if (Build.VERSION.SDK_INT > Build.VERSION_CODES.Q) {
-            supportedPermissions.remove(Manifest.permission.WRITE_EXTERNAL_STORAGE);
-        }
-
-        for (String permission : supportedPermissions) {
+        for (String permission : requiredPermissions) {
             int status = ActivityCompat.checkSelfPermission(activity, permission);
             if (status != PackageManager.PERMISSION_GRANTED) {
                 missingPermissions.add(permission);
@@ -306,10 +313,34 @@ class PickerModule extends ReactContextBaseJavaModule implements ActivityEventLi
         permissionsCheck(activity, promise, Arrays.asList(Manifest.permission.CAMERA, Manifest.permission.WRITE_EXTERNAL_STORAGE), new Callable<Void>() {
             @Override
             public Void call() {
+
+                if(isGPSRequired){
+                    /// get gps values
+                    getLatLong(activity);
+                }
                 initiateCamera(activity);
                 return null;
             }
         });
+    }
+
+    private void getLatLong(final Activity activity){
+
+                    FusedLocationProviderClient fusedLocationClient;
+            fusedLocationClient = LocationServices.getFusedLocationProviderClient(activity);
+            if (ActivityCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            }
+            fusedLocationClient.getLastLocation()
+                    .addOnSuccessListener(activity, new OnSuccessListener<Location>() {
+                        @Override
+                        public void onSuccess(Location location) {
+                            // Got last known location. In some rare situations this can be null.
+                            if (location != null) {
+                                    dLatitude = location.getLatitude();
+                                    dLongitude = location.getLongitude();
+                            }
+                        }
+                    });
     }
 
     private void initiateCamera(Activity activity) {
@@ -515,15 +546,10 @@ class PickerModule extends ReactContextBaseJavaModule implements ActivityEventLi
     }
 
     private static Long getVideoDuration(String path) {
-        try {
-            MediaMetadataRetriever retriever = new MediaMetadataRetriever();
-            retriever.setDataSource(path);
+        MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+        retriever.setDataSource(path);
 
-            return Long.parseLong(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION));
-        }
-        catch(Exception e) {
-            return -1L;
-        }
+        return Long.parseLong(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION));
     }
 
     private void getVideo(final Activity activity, final String path, final String mime) throws Exception {
@@ -600,42 +626,96 @@ class PickerModule extends ReactContextBaseJavaModule implements ActivityEventLi
         return options;
     }
 
-    private WritableMap getImage(final Activity activity, String path) throws Exception {
+
+
+    public static void writeLatLonIntoJpeg(String picPath, double dLat, double dLon) {
+        File file = new File(picPath);
+        if (file.exists()) {
+            try {
+                ExifInterface exif = new ExifInterface(picPath);
+                String tagLat = exif.getAttribute(ExifInterface.TAG_GPS_LATITUDE);
+                String tagLon = exif.getAttribute(ExifInterface.TAG_GPS_LONGITUDE);
+                if (tagLat == null && tagLon == null) {// 无经纬度信息
+                    exif.setAttribute(ExifInterface.TAG_GPS_LATITUDE, gpsInfoConvert(dLat));
+                    exif.setAttribute(ExifInterface.TAG_GPS_LATITUDE_REF, dLat > 0 ? "N" : "S"); // 区分南北半球
+                    exif.setAttribute(ExifInterface.TAG_GPS_LONGITUDE, gpsInfoConvert(dLon));
+                    exif.setAttribute(ExifInterface.TAG_GPS_LONGITUDE_REF, dLon > 0 ? "E" : "W"); // 区分东经西经
+                    exif.saveAttributes();
+                }
+                exif.saveAttributes();
+
+//                Logger.d(exif.getAttribute(ExifInterface.TAG_GPS_LATITUDE) + "\n"
+//                        + exif.getAttribute(ExifInterface.TAG_GPS_LONGITUDE) + "\n"
+//                        + exif.getAttribute(ExifInterface.TAG_GPS_PROCESSING_METHOD) + "\n"
+//                        + exif.getAttribute(ExifInterface.TAG_IMAGE_LENGTH) + "\n"
+//                        + exif.getAttribute(ExifInterface.TAG_IMAGE_WIDTH));
+            } catch (Exception e) {
+
+            }
+        }
+    }
+
+    private static String gpsInfoConvert(double gpsInfo){
+        gpsInfo = Math.abs(gpsInfo);
+        String dms = Location.convert(gpsInfo, Location.FORMAT_SECONDS);
+        String[] splits = dms.split(":");
+        String[] secnds = (splits[2]).split("\\.");
+        String seconds;
+        if (secnds.length == 0) {
+            seconds = splits[2];
+        } else {
+            seconds = secnds[0];
+        }
+        return  splits[0] + "/1," + splits[1] + "/1," + seconds + "/1";
+    }
+
+
+    @SuppressLint("MissingPermission")
+    private WritableMap getImage(final Activity activity, final String path) throws Exception {
         WritableMap image = new WritableNativeMap();
+
 
         if (path.startsWith("http://") || path.startsWith("https://")) {
             throw new Exception("Cannot select remote files");
         }
-        BitmapFactory.Options original = validateImage(path);
 
-        // if compression options are provided image will be compressed. If none options is provided,
-        // then original image will be returned
-        File compressedImage = compression.compressImage(this.reactContext, options, path, original);
-        String compressedImagePath = compressedImage.getPath();
-        BitmapFactory.Options options = validateImage(compressedImagePath);
-        long modificationDate = new File(path).lastModified();
 
-        image.putString("path", "file://" + compressedImagePath);
-        image.putInt("width", options.outWidth);
-        image.putInt("height", options.outHeight);
-        image.putString("mime", options.outMimeType);
-        image.putInt("size", (int) new File(compressedImagePath).length());
-        image.putString("modificationDate", String.valueOf(modificationDate));
+            BitmapFactory.Options original = validateImage(path);
 
-        if (includeBase64) {
-            image.putString("data", getBase64StringFromFile(compressedImagePath));
-        }
+            // if compression options are provided image will be compressed. If none options is provided,
+            // then original image will be returned
+            File compressedImage = compression.compressImage(this.reactContext, options, path, original);
+            String compressedImagePath = compressedImage.getPath();
 
-        if (includeExif) {
-            try {
-                WritableMap exif = ExifExtractor.extract(path);
-                image.putMap("exif", exif);
-            } catch (Exception ex) {
-                ex.printStackTrace();
+            if (isGPSRequired) {
+                writeLatLonIntoJpeg(compressedImagePath, dLatitude, dLongitude);
             }
-        }
 
-        return image;
+            BitmapFactory.Options options = validateImage(compressedImagePath);
+            long modificationDate = new File(path).lastModified();
+
+            image.putString("path", "file://" + compressedImagePath);
+            image.putInt("width", options.outWidth);
+            image.putInt("height", options.outHeight);
+            image.putString("mime", options.outMimeType);
+            image.putInt("size", (int) new File(compressedImagePath).length());
+            image.putString("modificationDate", String.valueOf(modificationDate));
+
+            if (includeBase64) {
+                image.putString("data", getBase64StringFromFile(compressedImagePath));
+            }
+
+            if (includeExif) {
+                try {
+                    WritableMap exif = ExifExtractor.extract(path);
+                    image.putMap("exif", exif);
+                } catch (Exception ex) {
+                    ex.printStackTrace();
+                }
+            }
+
+            return image;
+
     }
 
     private void configureCropperColors(UCrop.Options options) {
@@ -775,7 +855,7 @@ class PickerModule extends ReactContextBaseJavaModule implements ActivityEventLi
             if (resultUri != null) {
                 try {
                     if (width > 0 && height > 0) {
-                        File resized = compression.resize(this.reactContext, resultUri.getPath(), width, height, width, height, 100);
+                        File resized = compression.resize(this.reactContext, resultUri.getPath(), width, height, 100);
                         resultUri = Uri.fromFile(resized);
                     }
 
