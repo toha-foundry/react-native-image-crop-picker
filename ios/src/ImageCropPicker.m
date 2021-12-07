@@ -140,6 +140,10 @@ RCT_EXPORT_METHOD(openCamera:(NSDictionary *)options
     [self setConfiguration:options resolver:resolve rejecter:reject];
     self.currentSelectionMode = CAMERA;
     
+    
+//    [self CurrentLocationIdentifier]; // call this method
+    
+    
 #if TARGET_IPHONE_SIMULATOR
     self.reject(ERROR_PICKER_CANNOT_RUN_CAMERA_ON_SIMULATOR_KEY, ERROR_PICKER_CANNOT_RUN_CAMERA_ON_SIMULATOR_MSG, nil);
     return;
@@ -182,6 +186,19 @@ RCT_EXPORT_METHOD(openCamera:(NSDictionary *)options
     [self viewDidLoad];
 }
 
+//-(void)CurrentLocationIdentifier
+//{
+//
+//    if ([[[self options] objectForKey:@"isGPSRequired"] boolValue]) {}
+//    self.locationManager = [CLLocationManager new];
+//    self.locationManager.delegate = self;
+//    self.locationManager.distanceFilter = kCLDistanceFilterNone;
+//    self.locationManager.desiredAccuracy = kCLLocationAccuracyBest;
+//    [self.locationManager startUpdatingLocation];
+//
+//}
+
+
 - (void)imagePickerController:(UIImagePickerController *)picker didFinishPickingMediaWithInfo:(NSDictionary *)info {
     NSString* mediaType = [info objectForKey:UIImagePickerControllerMediaType];
     
@@ -211,6 +228,8 @@ RCT_EXPORT_METHOD(openCamera:(NSDictionary *)options
     } else {
         UIImage *chosenImage = [info objectForKey:UIImagePickerControllerOriginalImage];
         
+        //// add gps values here
+        ///
         NSDictionary *exif;
         if([[self.options objectForKey:@"includeExif"] boolValue]) {
             exif = [info objectForKey:UIImagePickerControllerMediaMetadata];
@@ -218,6 +237,36 @@ RCT_EXPORT_METHOD(openCamera:(NSDictionary *)options
         
         [self processSingleImagePick:chosenImage withExif:exif withViewController:picker withSourceURL:self.croppingFile[@"sourceURL"] withLocalIdentifier:self.croppingFile[@"localIdentifier"] withFilename:self.croppingFile[@"filename"] withCreationDate:self.croppingFile[@"creationDate"] withModificationDate:self.croppingFile[@"modificationDate"]];
     }
+}
+
+- (NSString*)setGps:(NSDictionary *)arguments {
+    
+  NSString *url = arguments[@"path"];
+  NSDictionary *location = [self.options objectForKey:@"location"];
+  NSDictionary *coords = [location objectForKey:@"coords"];
+  NSDictionary *gpsInfo = [[NSDictionary alloc] initWithObjectsAndKeys:[coords objectForKey:@"latitude"], kCGImagePropertyGPSLongitude, [coords objectForKey:@"longitude"], kCGImagePropertyGPSLatitude, nil];
+//  NSDictionary *gpsInfo = arguments[@"gps"];
+  NSURL *fileUrl = [NSURL fileURLWithPath:url];
+  
+  CGImageSourceRef imageSource = CGImageSourceCreateWithURL((CFURLRef)fileUrl, NULL);
+  CFDictionaryRef imageInfo = CGImageSourceCopyPropertiesAtIndex(imageSource, 0,NULL);
+  NSMutableDictionary *metaDataDic = [(__bridge NSDictionary *)imageInfo mutableCopy];
+  
+  [metaDataDic setObject:gpsInfo forKey:(NSNumber*)kCGImagePropertyGPSDictionary];
+  CFStringRef UTI = CGImageSourceGetType(imageSource);
+  
+  NSMutableData *newImageData = [NSMutableData data];
+  CGImageDestinationRef destination = CGImageDestinationCreateWithData((__bridge CFMutableDataRef)newImageData, UTI, 1,NULL);
+
+  //add the image contained in the image source to the destination, overidding the old metadata with our modified metadata
+  CGImageDestinationAddImageFromSource(destination, imageSource, 0, (__bridge CFDictionaryRef)metaDataDic);
+  CGImageDestinationFinalize(destination);
+//  NSString *directoryDocuments =  NSTemporaryDirectory();
+  [newImageData writeToFile: [fileUrl path] atomically:YES];
+  CIImage *testImage = [CIImage imageWithData:newImageData];
+  NSDictionary *propDict = [testImage properties];
+  NSLog(@"Properties %@", propDict);
+    return fileUrl.absoluteString;
 }
 
 - (void)imagePickerControllerDidCancel:(UIImagePickerController *)picker {
@@ -746,13 +795,21 @@ RCT_EXPORT_METHOD(openCropper:(NSDictionary *)options
     } else {
         ImageResult *imageResult = [self.compression compressImage:[image fixOrientation]  withOptions:self.options];
         NSString *filePath = [self persistFile:imageResult.data];
+        
+        
+        
+        if ([[[self options] objectForKey:@"isGPSRequired"] boolValue] && self.currentSelectionMode == CAMERA) {
+           NSDictionary *dict = [[NSDictionary alloc] initWithObjectsAndKeys:filePath, @"path", nil];
+            filePath = [self setGps:dict];
+        }
+        
+        
         if (filePath == nil) {
             [viewController dismissViewControllerAnimated:YES completion:[self waitAnimationEnd:^{
                 self.reject(ERROR_CANNOT_SAVE_IMAGE_KEY, ERROR_CANNOT_SAVE_IMAGE_MSG, nil);
             }]];
             return;
         }
-        
         // Wait for viewController to dismiss before resolving, or we lose the ability to display
         // Alert.alert in the .then() handler.
         [viewController dismissViewControllerAnimated:YES completion:[self waitAnimationEnd:^{

@@ -4,10 +4,10 @@ import android.app.Activity;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Matrix;
 import android.media.ExifInterface;
 import android.os.Environment;
 import android.util.Log;
-import android.util.Pair;
 
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.ReadableMap;
@@ -27,39 +27,38 @@ import java.util.UUID;
 
 class Compression {
 
-    File resize(
-            Context context,
-            String originalImagePath,
-            int originalWidth,
-            int originalHeight,
-            int maxWidth,
-            int maxHeight,
-            int quality
-    ) throws IOException {
-        Pair<Integer, Integer> targetDimensions =
-                this.calculateTargetDimensions(originalWidth, originalHeight, maxWidth, maxHeight);
+    File resize(Context context, String originalImagePath, int maxWidth, int maxHeight, int quality) throws IOException {
+        Bitmap original = BitmapFactory.decodeFile(originalImagePath);
 
-        int targetWidth = targetDimensions.first;
-        int targetHeight = targetDimensions.second;
-
-        Bitmap bitmap = null;
-        if (originalWidth <= maxWidth && originalHeight <= maxHeight) {
-            bitmap = BitmapFactory.decodeFile(originalImagePath);
-        } else {
-            BitmapFactory.Options options = new BitmapFactory.Options();
-            options.inSampleSize = calculateInSampleSize(originalWidth, originalHeight, targetWidth, targetHeight);
-            bitmap = BitmapFactory.decodeFile(originalImagePath, options);
-        }
+        int width = original.getWidth();
+        int height = original.getHeight();
 
         // Use original image exif orientation data to preserve image orientation for the resized bitmap
         ExifInterface originalExif = new ExifInterface(originalImagePath);
-        String originalOrientation = originalExif.getAttribute(ExifInterface.TAG_ORIENTATION);
+        int originalOrientation = originalExif.getAttributeInt(ExifInterface.TAG_ORIENTATION, 1);
 
-        bitmap = Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true);
+        Matrix rotationMatrix = new Matrix();
+        int rotationAngleInDegrees = getRotationInDegreesForOrientationTag(originalOrientation);
+        rotationMatrix.postRotate(rotationAngleInDegrees);
+
+        float ratioBitmap = (float) width / (float) height;
+        float ratioMax = (float) maxWidth / (float) maxHeight;
+
+        int finalWidth = maxWidth;
+        int finalHeight = maxHeight;
+
+        if (ratioMax > 1) {
+            finalWidth = (int) ((float) maxHeight * ratioBitmap);
+        } else {
+            finalHeight = (int) ((float) maxWidth / ratioBitmap);
+        }
+
+        Bitmap resized = Bitmap.createScaledBitmap(original, finalWidth, finalHeight, true);
+        resized = Bitmap.createBitmap(resized, 0, 0, finalWidth, finalHeight, rotationMatrix, true);
 
         File imageDirectory = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES);
 
-        if (!imageDirectory.exists()) {
+        if(!imageDirectory.exists()) {
             Log.d("image-crop-picker", "Pictures Directory is not existing. Will create this directory.");
             imageDirectory.mkdirs();
         }
@@ -67,42 +66,26 @@ class Compression {
         File resizeImageFile = new File(imageDirectory, UUID.randomUUID() + ".jpg");
 
         OutputStream os = new BufferedOutputStream(new FileOutputStream(resizeImageFile));
-        bitmap.compress(Bitmap.CompressFormat.JPEG, quality, os);
-
-        // Don't set unnecessary exif attribute
-        if (shouldSetOrientation(originalOrientation)) {
-            ExifInterface exif = new ExifInterface(resizeImageFile.getAbsolutePath());
-            exif.setAttribute(ExifInterface.TAG_ORIENTATION, originalOrientation);
-            exif.saveAttributes();
-        }
+        resized.compress(Bitmap.CompressFormat.JPEG, quality, os);
 
         os.close();
-        bitmap.recycle();
+        original.recycle();
+        resized.recycle();
 
         return resizeImageFile;
     }
 
-    private int calculateInSampleSize(int originalWidth, int originalHeight, int requestedWidth, int requestedHeight) {
-        int inSampleSize = 1;
-
-        if (originalWidth > requestedWidth || originalHeight > requestedHeight) {
-            final int halfWidth = originalWidth / 2;
-            final int halfHeight = originalHeight / 2;
-
-            // Calculate the largest inSampleSize value that is a power of 2 and keeps both
-            // height and width larger than the requested height and width.
-            while ((halfWidth / inSampleSize) >= requestedWidth
-                    && (halfHeight / inSampleSize) >= requestedHeight) {
-                inSampleSize *= 2;
-            }
+    int getRotationInDegreesForOrientationTag(int orientationTag) {
+        switch(orientationTag){
+            case ExifInterface.ORIENTATION_ROTATE_90:
+                return 90;
+            case ExifInterface.ORIENTATION_ROTATE_270:
+                return -90;
+            case ExifInterface.ORIENTATION_ROTATE_180:
+                return 180;
+            default:
+                return 0;
         }
-
-        return inSampleSize;
-    }
-
-    private boolean shouldSetOrientation(String orientation) {
-        return !orientation.equals(String.valueOf(ExifInterface.ORIENTATION_NORMAL))
-                && !orientation.equals(String.valueOf(ExifInterface.ORIENTATION_UNDEFINED));
     }
 
     File compressImage(final Context context, final ReadableMap options, final String originalImagePath, final BitmapFactory.Options bitmapOptions) throws IOException {
@@ -128,29 +111,19 @@ class Compression {
         int targetQuality = quality != null ? (int) (quality * 100) : 100;
         Log.d("image-crop-picker", "Compressing image with quality " + targetQuality);
 
-        if (maxWidth == null) maxWidth = bitmapOptions.outWidth;
-        if (maxHeight == null) maxHeight = bitmapOptions.outHeight;
-
-        return resize(context, originalImagePath, bitmapOptions.outWidth, bitmapOptions.outHeight, maxWidth, maxHeight, targetQuality);
-    }
-
-    private Pair<Integer, Integer> calculateTargetDimensions(int currentWidth, int currentHeight, int maxWidth, int maxHeight) {
-        int width = currentWidth;
-        int height = currentHeight;
-
-        if (width > maxWidth) {
-            float ratio = ((float) maxWidth / width);
-            height = (int) (height * ratio);
-            width = maxWidth;
+        if (maxWidth == null) {
+            maxWidth = bitmapOptions.outWidth;
+        } else {
+            maxWidth = Math.min(maxWidth, bitmapOptions.outWidth);
         }
 
-        if (height > maxHeight) {
-            float ratio = ((float) maxHeight / height);
-            width = (int) (width * ratio);
-            height = maxHeight;
+        if (maxHeight == null) {
+            maxHeight = bitmapOptions.outHeight;
+        } else {
+            maxHeight = Math.min(maxHeight, bitmapOptions.outHeight);
         }
 
-        return Pair.create(width, height);
+        return resize(context, originalImagePath, maxWidth, maxHeight, targetQuality);
     }
 
     synchronized void compressVideo(final Activity activity, final ReadableMap options, final String originalVideo, final String compressedVideo, final Promise promise) {
