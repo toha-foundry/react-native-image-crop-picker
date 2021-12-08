@@ -239,7 +239,7 @@ RCT_EXPORT_METHOD(openCamera:(NSDictionary *)options
     }
 }
 
-- (NSString*)setGps:(NSDictionary *)arguments {
+- (NSDictionary*)setGps:(NSDictionary *)arguments {
     
   NSString *url = arguments[@"path"];
   NSDictionary *location = [self.options objectForKey:@"location"];
@@ -266,7 +266,9 @@ RCT_EXPORT_METHOD(openCamera:(NSDictionary *)options
   CIImage *testImage = [CIImage imageWithData:newImageData];
   NSDictionary *propDict = [testImage properties];
   NSLog(@"Properties %@", propDict);
-    return fileUrl.absoluteString;
+  NSDictionary *fileInfo = [[NSDictionary alloc] initWithObjectsAndKeys:fileUrl.absoluteString, @"fileUrl", propDict, @"exifData", nil];
+    
+    return fileInfo; // fileUrl.absoluteString;
 }
 
 - (void)imagePickerControllerDidCancel:(UIImagePickerController *)picker {
@@ -771,8 +773,8 @@ RCT_EXPORT_METHOD(openCropper:(NSDictionary *)options
 // when user selected single image, with camera or from photo gallery,
 // this method will take care of attaching image metadata, and sending image to cropping controller
 // or to user directly
-- (void) processSingleImagePick:(UIImage*)image withExif:(NSDictionary*) exif withViewController:(UIViewController*)viewController withSourceURL:(NSString*)sourceURL withLocalIdentifier:(NSString*)localIdentifier withFilename:(NSString*)filename withCreationDate:(NSDate*)creationDate withModificationDate:(NSDate*)modificationDate {
-    
+- (void) processSingleImagePick:(UIImage*)image withExif:(NSDictionary*) exif0 withViewController:(UIViewController*)viewController withSourceURL:(NSString*)sourceURL withLocalIdentifier:(NSString*)localIdentifier withFilename:(NSString*)filename withCreationDate:(NSDate*)creationDate withModificationDate:(NSDate*)modificationDate {
+    NSDictionary *exif = exif0;
     if (image == nil) {
         [viewController dismissViewControllerAnimated:YES completion:[self waitAnimationEnd:^{
             self.reject(ERROR_PICKER_NO_DATA_KEY, ERROR_PICKER_NO_DATA_MSG, nil);
@@ -800,7 +802,9 @@ RCT_EXPORT_METHOD(openCropper:(NSDictionary *)options
         
         if ([[[self options] objectForKey:@"isGPSRequired"] boolValue] && self.currentSelectionMode == CAMERA) {
            NSDictionary *dict = [[NSDictionary alloc] initWithObjectsAndKeys:filePath, @"path", nil];
-            filePath = [self setGps:dict];
+            NSDictionary *fileInfo = [self setGps:dict];
+            filePath = [fileInfo objectForKey:@"fileUrl"];
+            exif = [fileInfo objectForKey:@"exifData"];
         }
         
         
