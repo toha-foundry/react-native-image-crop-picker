@@ -244,7 +244,7 @@ RCT_EXPORT_METHOD(openCamera:(NSDictionary *)options
   NSString *url = arguments[@"path"];
   NSDictionary *location = [self.options objectForKey:@"location"];
   NSDictionary *coords = [location objectForKey:@"coords"];
-  NSDictionary *gpsInfo = [[NSDictionary alloc] initWithObjectsAndKeys:[coords objectForKey:@"latitude"], kCGImagePropertyGPSLongitude, [coords objectForKey:@"longitude"], kCGImagePropertyGPSLatitude, nil];
+  NSDictionary *gpsInfo = [[NSDictionary alloc] initWithObjectsAndKeys:[coords objectForKey:@"longitude"], kCGImagePropertyGPSLongitude, [coords objectForKey:@"latitude"], kCGImagePropertyGPSLatitude, nil];
 //  NSDictionary *gpsInfo = arguments[@"gps"];
   NSURL *fileUrl = [NSURL fileURLWithPath:url];
   
